@@ -34,7 +34,7 @@ class KISSClient:
                 if response:
                     dst_call, src_call, message = self.decode_ax25_packet(response, "Received")
                     if self.message_callback:
-                        self.message_callback(message)  # Call the callback function with the message payload
+                        self.message_callback(f'{dst_call}: {message.decode('ascii')}')  # Call the callback function with the message payload
                 else:
                     print("Connection closed by server.")
                     break
