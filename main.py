@@ -1,4 +1,5 @@
 import socket
+import threading
 import time
 
 
@@ -7,6 +8,8 @@ class KISSClient:
         self.host = host
         self.port = port
         self.sock = None
+        self.running = False
+        self.receive_thread = None
 
     def connect(self):
         """Connect to the KISS server."""
@@ -16,14 +19,34 @@ class KISSClient:
 
     def send_command(self, command):
         """Send a command to the KISS server."""
-        print(f"Sending command: {command}")
         self.sock.sendall(command)
+        self.decode_ax25_packet(command, "Sent")
 
     def read_response(self, buffer_size=1024):
         """Read a response from the KISS server."""
-        response = self.sock.recv(buffer_size)
-        print(f"Received response: {response}")
-        return response
+        while self.running:
+            try:
+                response = self.sock.recv(buffer_size)
+                if response:
+                    self.decode_ax25_packet(response, "Received")
+                else:
+                    print("Connection closed by server.")
+                    break
+            except Exception as e:
+                print(f"An error occurred while receiving: {e}")
+                break
+
+    def start_receiving(self):
+        """Start the thread to continuously read responses."""
+        self.running = True
+        self.receive_thread = threading.Thread(target=self.read_response)
+        self.receive_thread.start()
+
+    def stop_receiving(self):
+        """Stop the thread that reads responses."""
+        self.running = False
+        if self.receive_thread:
+            self.receive_thread.join()
 
     def encode_callsign(self, callsign, ssid, last):
         """Encode a callsign in the AX.25 format."""
@@ -65,8 +88,31 @@ class KISSClient:
         frame = b'\xC0' + b'\x00' + ax25_payload + b'\xC0'  # Add starting and ending FEND (frame end)
         return frame
 
+    def decode_ax25_packet(self, packet, packet_type):
+        """Decode the AX.25 packet."""
+        # Remove KISS framing bytes (start and end with 0xC0)
+        if packet.startswith(b'\xC0') and packet.endswith(b'\xC0'):
+            packet = packet[1:-1]
+
+        # KISS command byte (skip it)
+        packet = packet[1:]
+
+        def decode_callsign(encoded):
+            callsign = ''.join(chr(b >> 1) for b in encoded[:6]).strip()
+            ssid = (encoded[6] >> 1) & 0x0F
+            return f"{callsign}-{ssid}" if ssid else callsign
+
+        dst_call = decode_callsign(packet[:7])
+        src_call = decode_callsign(packet[7:14])
+        control = packet[14]
+        pid = packet[15]
+        message = packet[16:].decode('ascii')
+
+        print(f"{packet_type}: From: {src_call} To: {dst_call} Message: {message}")
+
     def close(self):
         """Close the connection to the KISS server."""
+        self.stop_receiving()
         if self.sock:
             self.sock.close()
             print("Connection closed")
@@ -74,13 +120,17 @@ class KISSClient:
     def send_message(self, src_call, dst_call, message):
         try:
             self.connect()
+            self.start_receiving()
             message_command = self.create_kiss_frame(src_call, dst_call, message)
             self.send_command(message_command)
 
-            # Allow time for the response
-            time.sleep(1)
-            response = self.read_response()
-            print(f"Server response: {response}")
+            # Keep the connection open to receive messages
+            while True:
+                try:
+                    time.sleep(1)  # Keep the main thread alive
+                except KeyboardInterrupt:
+                    print("Interrupted by user.")
+                    break
 
         except socket.gaierror as e:
             print(f"An error occurred: {e} (hostname or IP address is invalid)")
@@ -92,4 +142,4 @@ class KISSClient:
 
 if __name__ == "__main__":
     client = KISSClient('localhost', 8100)
-    client.send_message('NOCALL', 'CQ', 'Hello, I have successfully sent a packet.')
+    client.send_message('NOCALL-0', 'CQ-0', 'Hello, I have successfully sent a packet.')
