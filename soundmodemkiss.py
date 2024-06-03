@@ -2,7 +2,6 @@ import socket
 import threading
 import time
 
-
 class KISSClient:
     def __init__(self, host, port, src_call, dst_call):
         self.host = host
@@ -13,6 +12,7 @@ class KISSClient:
         self.running = False
         self.receive_thread = None
         self.message_callback = None
+        self.ack_received = threading.Event()
 
     def connect(self):
         """Connect to the KISS server."""
@@ -25,7 +25,6 @@ class KISSClient:
         self.sock.sendall(command)
         self.decode_ax25_packet(command, "Sent")
 
-
     def read_response(self, buffer_size=1024):
         """Read a response from the KISS server."""
         while self.running:
@@ -33,14 +32,23 @@ class KISSClient:
                 response = self.sock.recv(buffer_size)
                 if response:
                     dst_call, src_call, message = self.decode_ax25_packet(response, "Received")
-                    if self.message_callback:
-                        self.message_callback(f'{dst_call}: {message.decode('ascii')}')  # Call the callback function with the message payload
+                    if message.decode('ascii') == 'ACK':
+                        self.ack_received.set()
+                    else:
+                        if self.message_callback:
+                            self.message_callback(f'{dst_call}: {message.decode("ascii")}')
+                        self.send_ack(src_call)  # Send an ACK back to the sender
                 else:
                     print("Connection closed by server.")
                     break
             except Exception as e:
                 print(f"An error occurred while receiving: {e}")
                 break
+
+    def send_ack(self, dst_call):
+        """Send an ACK to the sender."""
+        ack_command = self.create_kiss_frame(self.src_call, dst_call, 'ACK')
+        self.send_command(ack_command)
 
     def set_message_callback(self, callback):
         """Set a callback function to handle received messages."""
@@ -118,8 +126,6 @@ class KISSClient:
         pid = packet[15]
         message = packet[16:]
 
-        #print(f"{packet_type}: From: {src_call} To: {dst_call} Message: {message.decode('ascii')}")
-
         return dst_call, src_call, message
 
     def close(self):
@@ -133,9 +139,23 @@ class KISSClient:
         try:
             self.connect()
             self.start_receiving()
-            message_command = self.create_kiss_frame(src_call, dst_call, message)
-            self.send_command(message_command)
-            print(f'Sent Message: {message}')
+            attempts = 0
+            max_attempts = 3
+            while attempts < max_attempts:
+                message_command = self.create_kiss_frame(src_call, dst_call, message)
+                self.send_command(message_command)
+                print(f'Sent Message: {message}')
+
+                self.ack_received.clear()  # Clear the ACK event
+                if self.ack_received.wait(timeout=5):  # Wait for ACK with a timeout of 5 seconds
+                    print("ACK received, message sent successfully.")
+                    break  # Exit loop if ACK is received
+                else:
+                    attempts += 1
+                    print(f"No ACK received, retrying ({attempts}/{max_attempts})")
+
+            if attempts == max_attempts:
+                print("Failed to send message after 3 attempts.")
 
             # Keep the connection open to receive messages
             while True:
@@ -151,7 +171,6 @@ class KISSClient:
             print(f"An error occurred: {e}")
         finally:
             self.close()
-
 
 if __name__ == "__main__":
     src_call = 'K8SDR-1'
