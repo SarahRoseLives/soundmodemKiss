@@ -2,6 +2,7 @@ import socket
 import threading
 import time
 
+
 class KISSClient:
     def __init__(self, host, port, src_call, dst_call):
         self.host = host
@@ -32,11 +33,15 @@ class KISSClient:
                 response = self.sock.recv(buffer_size)
                 if response:
                     dst_call, src_call, message = self.decode_ax25_packet(response, "Received")
+                    if dst_call != self.src_call:
+                        print(f"Ignoring message addressed to {dst_call}")
+                        continue
+
                     if message.decode('ascii') == 'ACK':
                         self.ack_received.set()
                     else:
                         if self.message_callback:
-                            self.message_callback(f'{dst_call}: {message.decode("ascii")}')
+                            self.message_callback(f'{src_call}: {message.decode("ascii")}')
                         self.send_ack(src_call)  # Send an ACK back to the sender
                 else:
                     print("Connection closed by server.")
@@ -171,6 +176,7 @@ class KISSClient:
             print(f"An error occurred: {e}")
         finally:
             self.close()
+
 
 if __name__ == "__main__":
     src_call = 'K8SDR-1'
